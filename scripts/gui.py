@@ -32,6 +32,7 @@ DEFAULT_ADC_TITAN_ROOT = (
 )
 MODELS = ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001"]
 PROJECT_ID = 5  # ADC Test Automation
+NIGHTLY_RUNNER_USER_ID = 3  # TestRail user that creates the automated nightly runs/plans
 
 ANALYSIS_PROMPT_TEMPLATE = """\
 You are analyzing a failed TestRail test case for a Zebra scanner test automation suite.
@@ -279,15 +280,32 @@ class App:
 
         browse_lists = ttk.Frame(browse_frame)
         browse_lists.pack(fill="x", padx=4, pady=2)
-        self.milestone_listbox = tk.Listbox(browse_lists, height=6, exportselection=False)
-        self.milestone_listbox.pack(side="left", fill="both", expand=True, padx=(0, 4))
+
+        milestone_col = ttk.Frame(browse_lists)
+        milestone_col.pack(side="left", fill="both", expand=True, padx=(0, 4))
+        self.milestone_filter_var = tk.StringVar()
+        ttk.Entry(milestone_col, textvariable=self.milestone_filter_var).pack(
+            fill="x", pady=(0, 2)
+        )
+        self.milestone_filter_var.trace_add("write", lambda *_a: self._filter_milestones())
+        self.milestone_listbox = tk.Listbox(milestone_col, height=6, exportselection=False)
+        self.milestone_listbox.pack(fill="both", expand=True)
         self.milestone_listbox.bind("<<ListboxSelect>>", self.on_milestone_selected)
         self._milestones = []
+        self._filtered_milestones = []
 
-        self.run_plan_listbox = tk.Listbox(browse_lists, height=6, exportselection=False)
-        self.run_plan_listbox.pack(side="left", fill="both", expand=True)
+        run_plan_col = ttk.Frame(browse_lists)
+        run_plan_col.pack(side="left", fill="both", expand=True)
+        self.run_plan_filter_var = tk.StringVar()
+        ttk.Entry(run_plan_col, textvariable=self.run_plan_filter_var).pack(
+            fill="x", pady=(0, 2)
+        )
+        self.run_plan_filter_var.trace_add("write", lambda *_a: self._filter_run_plans())
+        self.run_plan_listbox = tk.Listbox(run_plan_col, height=6, exportselection=False)
+        self.run_plan_listbox.pack(fill="both", expand=True)
         self.run_plan_listbox.bind("<Double-Button-1>", self.on_run_plan_double_click)
         self._browse_items = []
+        self._filtered_browse_items = []
 
         ttk.Label(
             browse_frame, text="(double-click a run/plan to fetch its failures)"
@@ -400,18 +418,28 @@ class App:
 
     def _populate_milestones(self, milestones):
         self._milestones = milestones
-        self.milestone_listbox.delete(0, "end")
-        for m in milestones:
-            self.milestone_listbox.insert("end", m["name"])
+        self.milestone_filter_var.set("")
+        self._filter_milestones()
         self.set_busy(False)
+
+    def _filter_milestones(self):
+        query = self.milestone_filter_var.get().strip().lower()
+        self._filtered_milestones = [
+            m for m in self._milestones if query in m["name"].lower()
+        ]
+        self.milestone_listbox.delete(0, "end")
+        for m in self._filtered_milestones:
+            self.milestone_listbox.insert("end", m["name"])
 
     def on_milestone_selected(self, event):
         sel = self.milestone_listbox.curselection()
         if not sel:
             return
-        milestone_id = self._milestones[sel[0]]["id"]
+        milestone_id = self._filtered_milestones[sel[0]]["id"]
+        self.run_plan_filter_var.set("")
         self.run_plan_listbox.delete(0, "end")
         self._browse_items = []
+        self._filtered_browse_items = []
         threading.Thread(
             target=self._load_runs_plans_worker, args=(milestone_id,), daemon=True
         ).start()
@@ -429,8 +457,14 @@ class App:
                 plans = plans_data.get(
                     "plans", plans_data if isinstance(plans_data, list) else []
                 )
-                items += [{"kind": "run", "id": r["id"], "name": r["name"]} for r in runs]
-                items += [{"kind": "plan", "id": p["id"], "name": p["name"]} for p in plans]
+                items += [
+                    {"kind": "run", "id": r["id"], "name": r["name"]}
+                    for r in runs if r.get("created_by") != NIGHTLY_RUNNER_USER_ID
+                ]
+                items += [
+                    {"kind": "plan", "id": p["id"], "name": p["name"]}
+                    for p in plans if p.get("created_by") != NIGHTLY_RUNNER_USER_ID
+                ]
             items.sort(key=lambda x: x["name"])
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror("Load failed", str(e)))
@@ -439,15 +473,22 @@ class App:
 
     def _populate_runs_plans(self, items):
         self._browse_items = items
+        self._filter_run_plans()
+
+    def _filter_run_plans(self):
+        query = self.run_plan_filter_var.get().strip().lower()
+        self._filtered_browse_items = [
+            item for item in self._browse_items if query in item["name"].lower()
+        ]
         self.run_plan_listbox.delete(0, "end")
-        for item in items:
+        for item in self._filtered_browse_items:
             self.run_plan_listbox.insert("end", f"[{item['kind']}] {item['name']}")
 
     def on_run_plan_double_click(self, event):
         sel = self.run_plan_listbox.curselection()
         if not sel:
             return
-        item = self._browse_items[sel[0]]
+        item = self._filtered_browse_items[sel[0]]
         self.start_fetch(item["kind"], item["id"])
 
     def write_output(self, text):
