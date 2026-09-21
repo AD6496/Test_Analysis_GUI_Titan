@@ -47,14 +47,16 @@ Matched test source file(s) from the adc-titan repo:
 {source}
 ---
 
-Default to terse mode: a tight paragraph (3-6 sentences), not a numbered list or headers.
-Lead by naming the failed sub-case IDs, then the cause, then the recommendation, e.g.
-"TC-24070, TC-24071, TC-24072, TC-24073 all failed. I think it's because <mechanism in the
-code, file:line> -- <one sentence on what the log shows>. My recommendation is <one concrete
-next step>." Only go longer/structured (numbered parts, more detail per part) if the user
-asks for more detail or explicitly requests verbose mode.
+Keep it terse -- a short paragraph (3-6 sentences), not headers, not a numbered list -- but
+ALWAYS split it into two visually distinct pieces separated by a blank line:
+1. The finding paragraph: lead by naming the failed sub-case IDs, then the cause grounded in
+   file:line, then one sentence on what the log shows. E.g. "TC-24070, TC-24071, TC-24072,
+   TC-24073 all failed. I think it's because <mechanism in the code, file:line> -- <what the
+   log shows>."
+2. The recommendation: on its own line, after a blank line, starting with `**Recommendation:**`
+   -- never fold it into the finding paragraph, even in terse mode. One sentence.
 
-Ground it in file:line, covering the same substance either way:
+Ground the finding paragraph in file:line, covering this substance:
 1. What the test/sub-case does (from the code, not the log).
 2. What the log shows failed (the literal received-vs-expected or error string).
 3. Why, grounded in the code path -- e.g. a retry loop that gives up after N attempts,
@@ -75,9 +77,7 @@ reproducibility (e.g. a known-flaky retry/timing pattern in the code, or a singl
 failure with no shared signature) -- and say what would need to be checked (rerun, physical log
 inspection) rather than inventing a code-level cause.
 
-End with one concrete, imperative next step -- in terse mode fold it into the paragraph as
-"My recommendation is ..."; only break it onto its own `**Recommendation:**` line in verbose
-mode. Pick the recommendation from:
+The `**Recommendation:**` line must state one concrete, imperative next step, picked from:
 - Firmware/product bug (source and log both check out, DUT produced a genuinely bad value) ->
   file/reopen a JIRA against the responsible firmware component, citing file:line as repro evidence.
 - Test/framework bug (special-case branch is wrong, weak/missing verification) -> note the exact
@@ -112,8 +112,8 @@ Original evidence (log/comment, first 2000 chars) it was supposed to be grounded
 {evidence_excerpt}
 ---
 
-Matched source file(s) (first 6000 chars, line-numbered) it was supposed to cite -- use this,
-not just the log, to check whether file:line citations and quoted values are real:
+Matched source file(s), line-numbered, it was supposed to cite -- use this, not just the log,
+to check whether file:line citations and quoted values are real:
 ---
 {source_excerpt}
 ---
@@ -129,7 +129,7 @@ def judge_analysis(analysis_text, evidence_text, judge_model, source_text=""):
     prompt = JUDGE_PROMPT_TEMPLATE.format(
         analysis=analysis_text,
         evidence_excerpt=evidence_text[:2000],
-        source_excerpt=source_text[:6000] if source_text else "(not provided)",
+        source_excerpt=source_text if source_text else "(not provided)",
     )
     result = subprocess.run(
         ["claude", "-p", "--model", judge_model, "--output-format", "json", "--tools", ""],

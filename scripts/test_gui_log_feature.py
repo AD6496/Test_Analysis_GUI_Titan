@@ -61,9 +61,9 @@ def test_source_find(script_name, repo_root):
     return matches
 
 
-def judge_analysis(analysis_text, log_text, judge_model):
+def judge_analysis(analysis_text, log_text, judge_model, source_text=""):
     print(f"\nTest 5: Judging analysis quality (model: {judge_model})")
-    verdict = _judge_analysis(analysis_text, log_text, judge_model)
+    verdict = _judge_analysis(analysis_text, log_text, judge_model, source_text=source_text)
     if not verdict:
         print("  FAILED: no judge output or invalid JSON")
         return None
@@ -103,7 +103,7 @@ def main():
         print("\n[WARNING] No source file found — analysis will indicate this")
 
     print(f"\nTest 4: Analysis pipeline (model: {args.model})")
-    text, total_tokens, cost, _matches = run_analysis(
+    text, total_tokens, cost, _matches, source = run_analysis(
         "TUSC log file", log_text, script_name, DEFAULT_ADC_TITAN_ROOT, args.model
     )
     print(f"  Tokens: {total_tokens}")
@@ -114,7 +114,7 @@ def main():
     print(text)
     print("=" * 70)
 
-    verdict = judge_analysis(text, log_text, args.judge_model)
+    verdict = judge_analysis(text, log_text, args.judge_model, source_text=source)
 
     print("\n" + "=" * 70)
     if verdict and verdict.get("verdict") == "PASS":
