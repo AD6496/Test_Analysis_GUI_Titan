@@ -113,7 +113,19 @@ Read the whole file (these test files are short, ~50-150 lines). Identify:
 
 ## Step 5 — answer
 
-Give a short, concrete answer in three parts, referencing `file:line`:
+Default to **terse mode**: one tight paragraph (3-6 sentences), no headers, no numbered list.
+Lead with the failed sub-case IDs, then the cause, then the recommendation folded in as "My
+recommendation is ...", e.g.:
+
+> TC-24070, TC-24071, TC-24072, TC-24073 all failed. I think it's because `system_adf2.py:822`
+> sets a 10s no-data timeout right before the factory-default rule block, and all four got no
+> HID output at all after 3 reruns each — a genuine decode/transmission failure, not a parsing
+> bug. My recommendation is to pull the physical scan log to confirm the scanner never produced
+> output, then file a firmware defect against ADF2 rule setup after factory reset, citing
+> system_adf2.py:737-761.
+
+Only expand into the fuller structured form below if the user asks for more detail or
+explicitly requests verbose mode:
 1. **What the test/sub-case does** (1-2 sentences, from the code, not the log).
 2. **What the log shows failed** (the literal received-vs-expected or error string).
 3. **Why**, grounded in the code path — e.g. a retry loop that gives up after N attempts,
@@ -121,18 +133,19 @@ Give a short, concrete answer in three parts, referencing `file:line`:
    before an async condition needed for the test's own trigger, a timing race. Don't just
    restate the log; explain the mechanism in the source that produces that log line.
 
-If nothing in the source obviously explains it (assert looks straightforward, no special
-casing), say so plainly instead of speculating — call it a likely one-off hardware/timing
-flake and note what would need to be checked (rerun, physical log inspection) rather than
-inventing a code-level cause.
+Either way, ground it in `file:line`. If nothing in the source obviously explains it (assert
+looks straightforward, no special casing), say so plainly instead of speculating — call it a
+likely one-off hardware/timing flake and note what would need to be checked (rerun, physical
+log inspection) rather than inventing a code-level cause.
 
 ## Step 6 — recommend a course of action
 
-End with a line starting `**Recommendation:**` on its own — never fold it into the Step 5
-prose or bury it inside a longer sentence. State it as a direct imperative telling the human
-what to do next (rerun X, file JIRA against Y citing file:line, pull the USB capture from
-tusc<N>), not a description of what "would" happen. One concrete recommendation, picked from
-(don't list all options, just state the one that fits):
+In terse mode, fold the recommendation into the paragraph as "My recommendation is ...". In
+verbose mode only, end with a line starting `**Recommendation:**` on its own instead. Either
+way, state it as a direct imperative telling the human what to do next (rerun X, file JIRA
+against Y citing file:line, pull the USB capture from tusc<N>), not a description of what
+"would" happen. One concrete recommendation, picked from (don't list all options, just state
+the one that fits):
 - **Firmware/product bug** (code path genuinely produces the bad value) → file/reopen a
   JIRA against the responsible firmware component, cite the file:line mechanism as repro
   evidence.

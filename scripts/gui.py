@@ -47,7 +47,14 @@ Matched test source file(s) from the adc-titan repo:
 {source}
 ---
 
-Give a short, concrete answer in three parts, referencing file:line:
+Default to terse mode: a tight paragraph (3-6 sentences), not a numbered list or headers.
+Lead by naming the failed sub-case IDs, then the cause, then the recommendation, e.g.
+"TC-24070, TC-24071, TC-24072, TC-24073 all failed. I think it's because <mechanism in the
+code, file:line> -- <one sentence on what the log shows>. My recommendation is <one concrete
+next step>." Only go longer/structured (numbered parts, more detail per part) if the user
+asks for more detail or explicitly requests verbose mode.
+
+Ground it in file:line, covering the same substance either way:
 1. What the test/sub-case does (from the code, not the log).
 2. What the log shows failed (the literal received-vs-expected or error string).
 3. Why, grounded in the code path -- e.g. a retry loop that gives up after N attempts,
@@ -68,8 +75,9 @@ reproducibility (e.g. a known-flaky retry/timing pattern in the code, or a singl
 failure with no shared signature) -- and say what would need to be checked (rerun, physical log
 inspection) rather than inventing a code-level cause.
 
-End with a line starting `**Recommendation:**` on its own, stating one concrete, imperative next
-step, picked from:
+End with one concrete, imperative next step -- in terse mode fold it into the paragraph as
+"My recommendation is ..."; only break it onto its own `**Recommendation:**` line in verbose
+mode. Pick the recommendation from:
 - Firmware/product bug (source and log both check out, DUT produced a genuinely bad value) ->
   file/reopen a JIRA against the responsible firmware component, citing file:line as repro evidence.
 - Test/framework bug (special-case branch is wrong, weak/missing verification) -> note the exact
@@ -104,16 +112,24 @@ Original evidence (log/comment, first 2000 chars) it was supposed to be grounded
 {evidence_excerpt}
 ---
 
+Matched source file(s) (first 6000 chars, line-numbered) it was supposed to cite -- use this,
+not just the log, to check whether file:line citations and quoted values are real:
+---
+{source_excerpt}
+---
+
 Respond with ONLY a JSON object, no other text:
 {{"verdict": "PASS" or "FAIL", "score": <0-4 int, how many rubric criteria it met>,
  "reasoning": "<2-4 sentences citing which criteria passed/failed and why>"}}
 """
 
 
-def judge_analysis(analysis_text, evidence_text, judge_model):
+def judge_analysis(analysis_text, evidence_text, judge_model, source_text=""):
     """Grade an analysis against the quality rubric. Returns a dict or None on failure."""
     prompt = JUDGE_PROMPT_TEMPLATE.format(
-        analysis=analysis_text, evidence_excerpt=evidence_text[:2000]
+        analysis=analysis_text,
+        evidence_excerpt=evidence_text[:2000],
+        source_excerpt=source_text[:6000] if source_text else "(not provided)",
     )
     result = subprocess.run(
         ["claude", "-p", "--model", judge_model, "--output-format", "json", "--tools", ""],
@@ -161,11 +177,16 @@ def fetch_log_text(url):
 
 
 def run_analysis(evidence_label, evidence_text, script_name, repo_root, model):
-    """Build the analysis prompt and call `claude -p`. Returns (text, tokens, cost_usd, matches)."""
+    """Build the analysis prompt and call `claude -p`. Returns (text, tokens, cost_usd, matches, source)."""
     matches = find_source(script_name, repo_root)
     if matches:
         source = "\n\n".join(
-            f"--- {path} ---\n{open(path, encoding='utf-8').read()}"
+            f"--- {path} ---\n" + "\n".join(
+                f"{i}\t{line}"
+                for i, line in enumerate(
+                    open(path, encoding="utf-8").read().splitlines(), start=1
+                )
+            )
             for path in matches
         )
     else:
@@ -193,8 +214,8 @@ def run_analysis(evidence_label, evidence_text, script_name, repo_root, model):
             + usage.get("cache_read_input_tokens", 0)
         )
         cost = data.get("total_cost_usd", 0)
-        return (data.get("result") or "(no output)"), total_tokens, cost, matches
-    return result.stderr.strip() or "(no output)", 0, 0.0, matches
+        return (data.get("result") or "(no output)"), total_tokens, cost, matches, source
+    return result.stderr.strip() or "(no output)", 0, 0.0, matches, source
 
 
 class App:
@@ -686,7 +707,7 @@ class App:
 
     def _run_analysis(self, evidence_label, evidence_text, script_name, meta):
         model = self.model_var.get()
-        text, total_tokens, cost, matches = run_analysis(
+        text, total_tokens, cost, matches, source = run_analysis(
             evidence_label,
             evidence_text,
             script_name,
@@ -699,7 +720,7 @@ class App:
         judge_model = None
         if self.judge_var.get():
             judge_model = self.judge_model_var.get()
-            verdict = judge_analysis(text, evidence_text, judge_model)
+            verdict = judge_analysis(text, evidence_text, judge_model, source_text=source)
             if verdict:
                 footer += (
                     f"\n\n--- Judge ({judge_model}) ---\n"
