@@ -160,7 +160,7 @@ def fetch_log_text(url):
 
 
 def run_analysis(evidence_label, evidence_text, script_name, repo_root, model):
-    """Build the analysis prompt and call `claude -p`. Returns (text, tokens, cost_usd)."""
+    """Build the analysis prompt and call `claude -p`. Returns (text, tokens, cost_usd, matches)."""
     matches = find_source(script_name, repo_root)
     if matches:
         source = "\n\n".join(
@@ -192,8 +192,8 @@ def run_analysis(evidence_label, evidence_text, script_name, repo_root, model):
             + usage.get("cache_read_input_tokens", 0)
         )
         cost = data.get("total_cost_usd", 0)
-        return (data.get("result") or "(no output)"), total_tokens, cost
-    return result.stderr.strip() or "(no output)", 0, 0.0
+        return (data.get("result") or "(no output)"), total_tokens, cost, matches
+    return result.stderr.strip() or "(no output)", 0, 0.0, matches
 
 
 class App:
@@ -337,10 +337,17 @@ class App:
         self._tests = []
         self._sort_reverse = {}
 
+        action_frame = ttk.Frame(root)
+        action_frame.pack(fill="x", padx=8, pady=4)
         self.analyze_btn = ttk.Button(
-            root, text="Analyze Selected", command=self.analyze_selected
+            action_frame, text="Analyze Selected", command=self.analyze_selected
         )
-        self.analyze_btn.pack(padx=8, pady=4, anchor="w")
+        self.analyze_btn.pack(side="left")
+        self.save_btn = ttk.Button(
+            action_frame, text="Save Analysis...", command=self.save_analysis
+        )
+        self.save_btn.pack(side="left", padx=(8, 0))
+        self._last_analysis = None
 
         self.output = tk.Text(root, wrap="word", state="disabled")
         self.output.pack(fill="both", expand=True, padx=8, pady=4)
@@ -580,13 +587,28 @@ class App:
         try:
             self._apply_credentials()
             comment = test.get("comment") or get_failure_comment(test["id"]) or "(no comment found)"
+            is_retest = test.get("status_id") == 4
             label = (
                 "Failure comment from most recent Failed result (test is currently"
                 " marked Retest)"
-                if test.get("status_id") == 4
+                if is_retest
                 else "Failure comment from TestRail (log summary + failed sub-cases)"
             )
-            text = self._run_analysis(label, comment, test["title"])
+            created_on = test.get("comment_created_on")
+            result_date = (
+                datetime.datetime.fromtimestamp(created_on).strftime("%Y-%m-%d %H:%M")
+                if created_on else ""
+            )
+            meta = {
+                "run_name": test.get("run_name", ""),
+                "test_id": test["id"],
+                "test_title": test["title"],
+                "status": "Retest" if is_retest else "Failed",
+                "stats": test.get("stats") or {},
+                "result_date": result_date,
+                "testrail_url": f"http://titan.zebra.lan/testrail/index.php?/tests/view/{test['id']}",
+            }
+            text = self._run_analysis(label, comment, test["title"], meta)
         except Exception as e:
             text = f"Error: {e}"
         self.root.after(0, lambda: self.write_output(text))
@@ -604,36 +626,125 @@ class App:
         try:
             log_text = fetch_log_text(url)
             script_name = script_name_from_log_url(url)
+            meta = {
+                "run_name": "",
+                "test_id": None,
+                "test_title": script_name,
+                "status": "",
+                "stats": {},
+                "result_date": "",
+                "log_url": url,
+            }
             text = self._run_analysis(
-                f"TUSC log file ({url})", log_text, script_name
+                f"TUSC log file ({url})", log_text, script_name, meta
             )
         except Exception as e:
             text = f"Error: {e}"
         self.root.after(0, lambda: self.write_output(text))
         self.root.after(0, lambda: self.set_busy(False))
 
-    def _run_analysis(self, evidence_label, evidence_text, script_name):
-        text, total_tokens, cost = run_analysis(
+    def _run_analysis(self, evidence_label, evidence_text, script_name, meta):
+        model = self.model_var.get()
+        text, total_tokens, cost, matches = run_analysis(
             evidence_label,
             evidence_text,
             script_name,
             self.repo_var.get().strip(),
-            self.model_var.get(),
+            model,
         )
         footer = f"\n\n---\n{total_tokens} tokens, ${cost:.4f}"
 
+        verdict = None
+        judge_model = None
         if self.judge_var.get():
-            verdict = judge_analysis(text, evidence_text, self.judge_model_var.get())
+            judge_model = self.judge_model_var.get()
+            verdict = judge_analysis(text, evidence_text, judge_model)
             if verdict:
                 footer += (
-                    f"\n\n--- Judge ({self.judge_model_var.get()}) ---\n"
+                    f"\n\n--- Judge ({judge_model}) ---\n"
                     f"Verdict: {verdict.get('verdict')}  Score: {verdict.get('score')}/4\n"
                     f"Reasoning: {verdict.get('reasoning')}"
                 )
             else:
                 footer += "\n\n--- Judge ---\n(judge call failed or returned invalid output)"
 
+        self._last_analysis = {
+            "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "model": model,
+            "evidence_label": evidence_label,
+            "evidence_text": evidence_text,
+            "script_name": script_name,
+            "source_files": matches,
+            "analysis_text": text,
+            "tokens": total_tokens,
+            "cost_usd": cost,
+            "judge_model": judge_model,
+            "judge_verdict": verdict,
+            **meta,
+        }
         return text + footer
+
+    def save_analysis(self):
+        if not self._last_analysis:
+            messagebox.showinfo("Nothing to save", "Run an analysis first.")
+            return
+        a = self._last_analysis
+        default_name = f"analysis_{a.get('test_id') or a.get('script_name')}_{a['generated_at'].replace(':', '-').replace(' ', '_')}"
+        path = filedialog.asksaveasfilename(
+            title="Save Analysis",
+            initialfile=default_name,
+            defaultextension=".md",
+            filetypes=[("Markdown", "*.md"), ("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        base, _ext = os.path.splitext(path)
+        json_path = base + ".json"
+        md_path = base + ".md"
+
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(a, f, indent=2)
+
+        verdict = a.get("judge_verdict")
+        stats = a.get("stats") or {}
+        md_lines = [
+            f"# Analysis: {a.get('test_title') or a.get('script_name')}",
+            "",
+            f"- **Run:** {a.get('run_name') or '(n/a)'}",
+            f"- **Test ID:** {a.get('test_id') or '(n/a)'}",
+            f"- **Status:** {a.get('status') or '(n/a)'}",
+            f"- **Result date:** {a.get('result_date') or '(n/a)'}",
+            f"- **Generated:** {a['generated_at']}",
+            f"- **Model:** {a['model']}",
+            f"- **Tokens / Cost:** {a['tokens']} / ${a['cost_usd']:.4f}",
+        ]
+        if a.get("testrail_url"):
+            md_lines.append(f"- **TestRail:** {a['testrail_url']}")
+        if a.get("log_url"):
+            md_lines.append(f"- **Log URL:** {a['log_url']}")
+        if stats:
+            md_lines.append(
+                f"- **Stats:** {stats.get('Passed', '?')} passed /"
+                f" {stats.get('Failed', '?')} failed / {stats.get('Tests', '?')} total"
+            )
+        if a.get("source_files"):
+            md_lines.append(f"- **Source files:** {', '.join(a['source_files'])}")
+        md_lines += ["", "## Analysis", "", a["analysis_text"]]
+        if verdict:
+            md_lines += [
+                "",
+                f"## Judgement ({a.get('judge_model')})",
+                "",
+                f"**Verdict:** {verdict.get('verdict')}  **Score:** {verdict.get('score')}/4",
+                "",
+                verdict.get("reasoning", ""),
+            ]
+        md_lines += ["", "## Original Evidence", "", "```", a["evidence_text"], "```"]
+
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(md_lines))
+
+        messagebox.showinfo("Saved", f"Saved:\n{md_path}\n{json_path}")
 
 
 def main():

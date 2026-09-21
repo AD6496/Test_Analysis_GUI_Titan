@@ -103,7 +103,7 @@ def main():
         print("\n[WARNING] No source file found — analysis will indicate this")
 
     print(f"\nTest 4: Analysis pipeline (model: {args.model})")
-    text, total_tokens, cost = run_analysis(
+    text, total_tokens, cost, _matches = run_analysis(
         "TUSC log file", log_text, script_name, DEFAULT_ADC_TITAN_ROOT, args.model
     )
     print(f"  Tokens: {total_tokens}")
